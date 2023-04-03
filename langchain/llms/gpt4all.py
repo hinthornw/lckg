@@ -160,7 +160,7 @@ class GPT4All(LLM, BaseModel):
         """Return the type of llm."""
         return "gpt4all"
 
-    def _call(self, prompt: str, stop: Optional[List[str]] = ...) -> str:
+    def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
         r"""Call out to GPT4All's generate method.
 
         Args:
