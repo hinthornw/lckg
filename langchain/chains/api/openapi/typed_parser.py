@@ -1,7 +1,10 @@
 """Utility functions for parsing an OpenAPI spec into LangChain Tools / Toolkits."""
+import copy
+import json
 import logging
 import re
 from typing import Dict, List, Optional, Tuple, Union
+import requests
 
 import tldextract
 from openapi_schema_pydantic import (
@@ -14,8 +17,42 @@ from openapi_schema_pydantic import (
     Response,
     Schema,
 )
+from openapi_schema_pydantic import OpenAPI
+from pydantic import ValidationError
+import yaml
+
+from langchain.requests import RequestsWrapper
 
 logger = logging.getLogger(__name__)
+
+
+class _OpenAPIModel(OpenAPI):
+    """OpenAPI Model that removes misformatted parts of the spec."""
+
+    @classmethod
+    def parse_obj(cls, obj):
+        try:
+            return super().parse_obj(obj)
+        except ValidationError as e:
+            # We are handling possibly misconfigured specs and want to do a best-effort
+            # job to get a reasonable interface out of it.
+            new_obj = copy.deepcopy(obj)
+            for error in e.errors():
+                keys = error["loc"]
+                item = new_obj
+                for key in keys[:-1]:
+                    item = item[key]
+                item.pop(keys[-1], None)
+            return cls.parse_obj(new_obj)
+
+
+# TODO: Share with others
+def _marshal_spec(txt: str) -> dict:
+    """Convert the yaml or json serialized spec to a dict."""
+    try:
+        return json.loads(txt)
+    except json.JSONDecodeError:
+        return yaml.safe_load(txt)
 
 
 def _resolve_reference(
@@ -139,6 +176,9 @@ def _resolve_query_params_schema(operation: Operation, spec: OpenAPI) -> Schema:
     return Schema(
         type="object", properties=query_params_schema_dict, required=sorted(required)
     )
+
+
+###### Shared functions #######
 
 
 def extract_domain(url: str) -> str:
@@ -290,3 +330,49 @@ def resolve_schema(
         _schema.description = description
     _dereference_children(_schema, spec)
     return _schema
+
+
+def get_openapi_spec(url: str) -> OpenAPI:
+    """Get an OpenAPI spec from a URL."""
+    response = requests.get(url)
+    open_api_spec = _marshal_spec(response.text)
+    return _OpenAPIModel.parse_obj(open_api_spec)
+
+
+def from_operation_and_spec(
+    path: str,
+    requests_method: str,
+    operation: Operation,
+    spec: OpenAPI,
+    requests_wrapper: RequestsWrapper,
+    toolkit_name: Optional[str] = None,
+) -> "OpenAPITool":
+    """Create a tool from an operation and a spec."""
+    # TODO: Handle multiple servers
+    base_url = spec.servers[0].url
+    path_params = extract_path_params(path)
+    toolkit_name = toolkit_name or extract_domain(spec.servers[0].url)
+    query_params, body_params = extract_query_and_body_params(operation, spec)
+    operation_id = get_cleaned_operation_id(operation, path, requests_method)
+    operation_schema = generate_resolved_schema(operation, spec)
+    response_schema = generate_resolved_response_schema(operation, spec)
+    if path_params:
+        if not operation_schema.required:
+            operation_schema.required = []
+        operation_schema.required.extend(path_params)
+    minimal_typescript_schema = schema_to_typescript(
+        operation_schema, spec, verbose=False
+    )
+    verbose_typescript_schema = schema_to_typescript(
+        operation_schema, spec, verbose=True
+    )
+    name = f"{toolkit_name}.{operation_id}"
+    ts_description = operation.description or operation.summary or ""
+
+    description = (
+        f"{ts_description}\n"
+        " Expects a JSON string to be deserialized as:\n"
+        "```typescript\n"
+        f"{minimal_typescript_schema}\n"
+        "```"
+    )
