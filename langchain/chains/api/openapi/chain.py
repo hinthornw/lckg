@@ -198,9 +198,10 @@ class OpenAPIEndpointChain(Chain, BaseModel):
 #     "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/notion.com/1.0.0/openapi.yaml",
 #     "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/twitter.com/current/2.61/openapi.yaml",
 # ]
-from langchain.llms import OpenAI
+from langchain.llms import OpenAI, Anthropic
 
-llm = OpenAI()
+# llm = OpenAI()
+llm = Anthropic()
 requests = Requests()
 method = "get"
 twitter_url = "https://api.twitter.com/2/openapi.json"
@@ -214,7 +215,7 @@ chain = OpenAPIEndpointChain.from_operation_and_spec(
 )
 
 # %%
-chain("I want to find some followers")
+print(chain("I want to find some followers"))
 
 # %%
 chain.url
