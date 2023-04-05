@@ -40,7 +40,7 @@ You MUST strictly comply to the types indicated by the provided schema, includin
 If you don't have sufficient information to call the function due to things like requiring specific uuid's, you can reply with the following message:
 
 Message: ```text
-"Concise response requesting the additional information that would make calling the function successful."
+Concise response requesting the additional information that would make calling the function successful.
 ```
 
 Begin
@@ -59,9 +59,9 @@ class APIRequesterOutputParser(BaseOutputParser):
             typescript_block = json_match.group(1).strip()
             try:
                 return json.dumps(json5.loads(typescript_block))
-            except json5.JSONDecodeError:
+            except json.JSONDecodeError:
                 return "ERROR serializing request"
-        message_match = re.search(r"```text", llm_output, re.DOTALL)
+        message_match = re.search(r"```text(.*?)```", llm_output, re.DOTALL)
         if message_match:
             return f"MESSAGE: {message_match.group(1).strip()}"
         return "ERROR making request"

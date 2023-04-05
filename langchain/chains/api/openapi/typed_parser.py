@@ -6,7 +6,6 @@ import re
 from typing import Dict, List, Optional, Tuple, Union
 import requests
 
-import tldextract
 from openapi_schema_pydantic import (
     MediaType,
     OpenAPI,
@@ -105,7 +104,7 @@ def _dereference_properties(schema: Schema, spec: OpenAPI) -> None:
 
 
 def _dereference_children(schema: Schema, spec: OpenAPI) -> None:
-
+    """Dereference children."""
     _dereference_anyof(schema, spec)
     _dereference_properties(schema, spec)
 
@@ -179,12 +178,6 @@ def _resolve_query_params_schema(operation: Operation, spec: OpenAPI) -> Schema:
 
 
 ###### Shared functions #######
-
-
-def extract_domain(url: str) -> str:
-    """Extract domain from url."""
-    extracted = tldextract.extract(url)
-    return extracted.domain
 
 
 def extract_path_params(path: str) -> List[str]:
@@ -337,3 +330,10 @@ def get_openapi_spec(url: str) -> OpenAPI:
     response = requests.get(url)
     open_api_spec = _marshal_spec(response.text)
     return _OpenAPIModel.parse_obj(open_api_spec)
+
+
+# if __name__ == "__main__":
+#     CACHED_OPENAPI_SPECS = ["http://127.0.0.1:7289/openapi.json"]
+
+#     spec = get_openapi_spec(CACHED_OPENAPI_SPECS[0])
+#     print(spec)

@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Sequence, Type, Union
 
 from pydantic import BaseModel, Field, constr
+import yaml
 
 
 class HTTPVerb(str, Enum):

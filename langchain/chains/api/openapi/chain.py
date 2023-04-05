@@ -137,18 +137,36 @@ class OpenAPIEndpointChain(Chain, BaseModel):
         return "openapi_chain"
 
     @classmethod
+    def from_operation_and_url(
+        cls,
+        path: str,
+        method: str,
+        spec_url: OpenAPI,
+        requests: Requests,
+        llm: BaseLLM,
+        # TODO: Handle async
+    ) -> "OpenAPIEndpointChain":
+        """Create an OpenAPIEndpoint from a spec at the specified url."""
+        spec = get_openapi_spec(spec_url)
+        return cls.from_operation_and_spec(
+            path=path,
+            method=method,
+            spec=spec,
+            requests=requests,
+            llm=llm,
+        )
+
+    @classmethod
     def from_operation_and_spec(
         cls,
         path: str,
         method: str,
-        spec: Union[OpenAPI, str],
+        spec: OpenAPI,
         requests: Requests,
         llm: BaseLLM,
         # TODO: Handle async
     ) -> "OpenAPIEndpointChain":
         """Create an OpenAPIEndpointChain from an operation and a spec."""
-        if isinstance(spec, str):
-            spec = get_openapi_spec(spec)
         http_verb = HTTPVerb.from_str(method)
         path_item = spec.paths[path]
         if not path_item:
@@ -203,19 +221,19 @@ from langchain.llms import OpenAI, Anthropic
 # llm = OpenAI()
 llm = Anthropic()
 requests = Requests()
-method = "get"
-twitter_url = "https://api.twitter.com/2/openapi.json"
-path = "/2/lists/{id}/followers"
-chain = OpenAPIEndpointChain.from_operation_and_spec(
+method = "post"
+twitter_url = "http://127.0.0.1:7289/openapi.json"
+path = "/ask_for_help"
+chain = OpenAPIEndpointChain.from_operation_and_url(
     path=path,
     method=method,
-    spec=twitter_url,
+    spec_url=twitter_url,
     requests=requests,
     llm=llm,
 )
 
 # %%
-print(chain("I want to find some followers"))
+print(chain("Can you help me learn about robots?"))
 
 # %%
 chain.url

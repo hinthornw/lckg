@@ -1,5 +1,6 @@
 """Response parser."""
 
+import json
 import re
 
 import json5
@@ -42,8 +43,10 @@ class APIResponderOutputParser(BaseOutputParser):
             try:
                 response_content = json5.loads(json_match.group(1).strip())
                 return response_content.get("response", "ERROR parsing response.")
-            except json5.JSONDecodeError:
+            except json.JSONDecodeError:
                 return "ERROR parsing response."
+            except:
+                raise
         else:
             raise ValueError("No response found in output.")
 
