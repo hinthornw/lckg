@@ -223,7 +223,7 @@ llm = Anthropic()
 requests = Requests()
 method = "post"
 twitter_url = "http://127.0.0.1:7289/openapi.json"
-path = "/ask_for_help"
+path = "/hide"
 chain = OpenAPIEndpointChain.from_operation_and_url(
     path=path,
     method=method,
@@ -233,7 +233,7 @@ chain = OpenAPIEndpointChain.from_operation_and_url(
 )
 
 # %%
-print(chain("Can you help me learn about robots?"))
+print(chain("Please hide."))
 
 # %%
 chain.url

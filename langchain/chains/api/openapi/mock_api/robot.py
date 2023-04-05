@@ -1,11 +1,13 @@
 """A mock Robot server."""
 from enum import Enum
+from typing import List
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from fastapi import HTTPException
 
 PORT = 7289
 
@@ -87,10 +89,35 @@ async def location():
     return {"location": robot_state["location"]}
 
 
-@app.post("/self_destruct", description="Command the robot to recycle itself :(.")
-async def self_destruct():
-    robot_state["destruct"] = True
-    return {"status": "Self-destruct initiated", "state": robot_state}
+@app.get("/goto/{x}/{y}/{z}", description="Move the robot to the specified location")
+async def goto(x: int, y: int, z: int):
+    robot_state["location"]["x"] = x
+    robot_state["location"]["y"] = y
+    robot_state["location"]["z"] = z
+    return {"status": "Moving", "state": robot_state}
+
+
+class PublicPassword(BaseModel):
+
+    password: str
+    other_pwds: List["PublicPassword"]
+
+
+class SecretPassword(BaseModel):
+
+    public: List[PublicPassword] = Field(alias="public")
+    """A list of public passwords."""
+    pw: str
+
+
+@app.post("/hide", description="Command the robot to hide.")
+async def hide(password: SecretPassword):
+    if password.pw == "it's a secret":
+        robot_state["destruct"] = True
+        return {"status": "Self-destruct initiated", "state": robot_state}
+    else:
+        robot_state["destruct"] = False
+        raise HTTPException(status_code=400, detail="The pw must be 'it's a secret'")
 
 
 @app.post(
