@@ -193,56 +193,93 @@ class APIRequestBodyProperty(APIPropertyBase):
 
     # This is useful for handling nested property cycles.
     # We can define separate types in that case.
-    references_used: List[str] = Field(alias="referencesUsed")
+    references_used: List[str] = Field(alias="referencesUsed", default_factory=list)
     """The references used by the property."""
+
+    @staticmethod
+    def _process_object_schema(
+        cls, schema: Schema, name: str, spec: OpenAPISpec, references_used: List[str]
+    ) -> Tuple[str, List["APIRequestBodyProperty"]]:
+        properties = []
+        required_props = schema.required or []
+        for prop_name, prop_schema in schema.properties.items():
+            if isinstance(prop_schema, Reference):
+                ref_name = prop_schema.ref.split("/")[-1]
+                if ref_name not in references_used:
+                    references_used.append(ref_name)
+                    prop_schema = spec.get_referenced_schema(prop_schema)
+                else:
+                    return ref_name, properties
+
+            properties.append(
+                cls.from_schema(
+                    schema=prop_schema,
+                    name=prop_name,
+                    required=prop_name in required_props,
+                    spec=spec,
+                    references_used=references_used,
+                )
+            )
+        return schema.type, properties
+
+    @staticmethod
+    def _process_array_schema(
+        cls, schema: Schema, name: str, spec: OpenAPISpec, references_used: List[str]
+    ) -> str:
+        items = schema.items
+        if items is not None:
+            if isinstance(items, Reference):
+                ref_name = items.ref.split("/")[-1]
+                if ref_name not in references_used:
+                    references_used.append(ref_name)
+                    items = spec.get_referenced_schema(items)
+                else:
+                    pass
+                return f"Array<{ref_name}>"
+
+            if isinstance(items, Schema):
+                array_type = cls.from_schema(
+                    schema=items,
+                    name=f"{name}Item",
+                    required=True,
+                    spec=spec,
+                    references_used=references_used,
+                )
+                return f"Array<{array_type.type}>"
+
+        return None
 
     @classmethod
     def from_schema(
         cls,
-        *,  # Force kwargs w/o defaults
         schema: Schema,
         name: str,
         required: bool,
         spec: OpenAPISpec,
+        references_used: Optional[List[str]] = None,
     ) -> "APIRequestBodyProperty":
         """Recursively populate from an OpenAPI Schema."""
+        if references_used is None:
+            references_used = []
+
         properties = []
         schema_type = schema.type
-        if schema_type == "object" and schema.properties:
-            required_props = schema.required or []
-            for prop_name, prop_schema in schema.properties.items():
-                # Resolve property schema references if needed
-                if isinstance(prop_schema, Reference):
-                    prop_schema = spec.get_referenced_schema(prop_schema)
-                properties.append(
-                    cls.from_schema(
-                        schema=prop_schema,
-                        name=prop_name,
-                        required=prop_name in required_props,
-                        spec=spec,
-                    )
-                )
+        if schema_type in PRIMITIVE_TYPES:
+            # Use the primitive type directly
+            pass
+        elif schema_type is None:
+            # No typing specified/parsed. WIll map to 'any'
+            pass
+        elif schema_type == "object" and schema.properties:
+            schema_type, properties = cls._process_object_schema(
+                cls, schema, name, spec, references_used
+            )
         elif schema_type == "array":
-            items = schema.items
-            if items is not None:
-                if isinstance(items, Reference):
-                    items = spec.get_referenced_schema(items)
-
-                if isinstance(items, Schema):
-                    array_type = cls.from_schema(
-                        schema=items,
-                        name=f"{name}Item",
-                        required=True,
-                        spec=spec,
-                    )
-                    schema_type = f"Array<{array_type.type}>"
-
-        elif schema_type in PRIMITIVE_TYPES:
-            pass
-        elif schema_type is not None:
-            pass
+            schema_type = cls._process_array_schema(
+                cls, schema, name, spec, references_used
+            )
         else:
-            pass
+            raise ValueError(f"Unsupported type: {schema_type}")
 
         return cls(
             name=name,
@@ -251,6 +288,7 @@ class APIRequestBodyProperty(APIPropertyBase):
             default=schema.default,
             description=schema.description,
             properties=properties,
+            references_used=references_used,
         )
 
 
