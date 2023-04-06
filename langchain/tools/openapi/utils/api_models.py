@@ -1,9 +1,8 @@
 """Pydantic models for parsing an OpenAPI spec."""
-
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
 
-from openapi_schema_pydantic import MediaType, Parameter, Reference, Schema
+from openapi_schema_pydantic import MediaType, Parameter, Reference, RequestBody, Schema
 from pydantic import BaseModel, Field
 
 from langchain.tools.openapi.utils.openapi_utils import HTTPVerb, OpenAPISpec
@@ -39,6 +38,8 @@ class APIPropertyLocation(Enum):
                 f"Invalid APIPropertyLocation. Valid values are {cls.__members__}"
             )
 
+
+_SUPPORTED_MEDIA_TYPES = ("application/json",)
 
 SUPPORTED_LOCATIONS = {
     APIPropertyLocation.QUERY,
@@ -187,18 +188,144 @@ class APIProperty(APIPropertyBase):
 class APIRequestBodyProperty(APIPropertyBase):
     """A model for a request body property."""
 
-    properties: List[APIProperty] = Field(alias="properties")
+    properties: List["APIRequestBodyProperty"] = Field(alias="properties")
     """The sub-properties of the property."""
+
+    # This is useful for handling nested property cycles.
+    # We can define separate types in that case.
+    references_used: List[str] = Field(alias="referencesUsed")
+    """The references used by the property."""
+
+    @classmethod
+    def from_schema(
+        cls,
+        *,  # Force kwargs w/o defaults
+        schema: Schema,
+        name: str,
+        required: bool,
+        spec: OpenAPISpec,
+    ) -> "APIRequestBodyProperty":
+        """Recursively populate from an OpenAPI Schema."""
+        properties = []
+        schema_type = schema.type
+        if schema_type == "object" and schema.properties:
+            required_props = schema.required or []
+            for prop_name, prop_schema in schema.properties.items():
+                # Resolve property schema references if needed
+                if isinstance(prop_schema, Reference):
+                    prop_schema = spec.get_referenced_schema(prop_schema)
+                properties.append(
+                    cls.from_schema(
+                        schema=prop_schema,
+                        name=prop_name,
+                        required=prop_name in required_props,
+                        spec=spec,
+                    )
+                )
+        elif schema_type == "array":
+            items = schema.items
+            if items is not None:
+                if isinstance(items, Reference):
+                    items = spec.get_referenced_schema(items)
+
+                if isinstance(items, Schema):
+                    array_type = cls.from_schema(
+                        schema=items,
+                        name=f"{name}Item",
+                        required=True,
+                        spec=spec,
+                    )
+                    schema_type = f"Array<{array_type.type}>"
+
+        elif schema_type in PRIMITIVE_TYPES:
+            pass
+        elif schema_type is not None:
+            pass
+        else:
+            pass
+
+        return cls(
+            name=name,
+            required=required,
+            type=schema_type,
+            default=schema.default,
+            description=schema.description,
+            properties=properties,
+        )
 
 
 class APIRequestBody(BaseModel):
     """A model for a request body."""
+
+    description: Optional[str] = Field(alias="description")
+    """The description of the request body."""
 
     properties: List[APIRequestBodyProperty] = Field(alias="properties")
 
     # E.g., application/json - we only support JSON at the moment.
     media_type: str = Field(alias="media_type")
     """The media type of the request body."""
+
+    @classmethod
+    def from_request_body(
+        cls, request_body: RequestBody, spec: OpenAPISpec
+    ) -> "APIRequestBody":
+        """Instantiate from an OpenAPI RequestBody."""
+        properties = []
+
+        # Loop through the content dictionary
+        for media_type, media_type_obj in request_body.content.items():
+            # TODO: If we support other media types,
+            # we will have to represent them as mutually
+            # exclusive properties.
+            if media_type not in _SUPPORTED_MEDIA_TYPES:
+                # TODO: Support other media types,
+                # especially application/x-www-form-urlencoded
+                continue
+            schema = media_type_obj.media_type_schema
+            if isinstance(schema, Reference):
+                schema = spec.get_referenced_schema(schema)
+            if schema is None:
+                raise ValueError(
+                    f"Error dereferencing schema: {media_type_obj.media_type_schema}"
+                )
+            required_properties = schema.required or []
+            if schema.type == "object" and schema.properties:
+                api_request_body_properties = []
+
+                for prop_name, prop_schema in schema.properties.items():
+                    # Resolve property schema references if needed
+                    if isinstance(prop_schema, Reference):
+                        prop_schema = spec.get_referenced_schema(prop_schema)
+
+                    api_request_body_properties.append(
+                        APIRequestBodyProperty.from_schema(
+                            schema=prop_schema,
+                            name=prop_name,
+                            required=prop_name in required_properties,
+                            spec=spec,
+                        )
+                    )
+
+                properties.extend(api_request_body_properties)
+
+            else:
+                properties.append(
+                    APIRequestBodyProperty(
+                        name="body",
+                        required=request_body.required,
+                        type=schema.type,
+                        default=schema.default,
+                        description=request_body.description,
+                        properties=[],
+                    )
+                )
+
+        return cls(
+            description=request_body.description,
+            properties=properties,
+            media_type=media_type,
+        )
 
 
 class APIOperation(BaseModel):
@@ -226,8 +353,8 @@ class APIOperation(BaseModel):
     # """The properties of the operation."""
     # components: Dict[str, BaseModel] = Field(alias="components")
 
-    # request_body: Optional[APIRequestBody] = Field(alias="request_body")
-    # """The request body of the operation."""
+    request_body: Optional[APIRequestBody] = Field(alias="request_body")
+    """The request body of the operation."""
 
     @classmethod
     def from_openapi_url(
@@ -252,6 +379,12 @@ class APIOperation(BaseModel):
         parameters = spec.get_parameters_for_operation(operation)
         properties = [APIProperty.from_parameter(param, spec) for param in parameters]
         operation_id = OpenAPISpec.get_cleaned_operation_id(operation, path, method)
+        request_body = spec.get_request_body_for_operation(operation)
+        api_request_body = (
+            APIRequestBody.from_request_body(request_body, spec)
+            if request_body is not None
+            else None
+        )
         return cls(
             operation_id=operation_id,
             description=operation.description,
@@ -259,6 +392,7 @@ class APIOperation(BaseModel):
             path=path,
             method=method,
             properties=properties,
+            request_body=api_request_body,
         )
 
     @staticmethod
@@ -281,10 +415,40 @@ class APIOperation(BaseModel):
         else:
             return str(type_)
 
+    def _format_nested_properties(
+        self, properties: List[APIRequestBodyProperty], indent: int = 2
+    ) -> str:
+        """Format nested properties."""
+        formatted_props = []
+
+        for prop in properties:
+            prop_name = prop.name
+            prop_type = self.ts_type_from_python(prop.type)
+            prop_required = "" if prop.required else "?"
+            prop_desc = f"/* {prop.description} */" if prop.description else ""
+
+            if prop.properties:
+                nested_props = self._format_nested_properties(
+                    prop.properties, indent + 2
+                )
+                prop_type = f"{{\n{nested_props}\n{' ' * indent}}}"
+
+            formatted_props.append(
+                f"{prop_desc}\n{' ' * indent}{prop_name}{prop_required}: {prop_type},"
+            )
+
+        return "\n".join(formatted_props)
+
     def to_typescript(self) -> str:
         """Get typescript string representation of the operation."""
         operation_name = self.operation_id
         params = []
+
+        if self.request_body:
+            formatted_request_body_props = self._format_nested_properties(
+                self.request_body.properties
+            )
+            params.append(formatted_request_body_props)
 
         for prop in self.properties:
             prop_name = prop.name
@@ -296,9 +460,9 @@ class APIOperation(BaseModel):
         formatted_params = "\n".join(params).strip()
         description_str = f"/* {self.description} */" if self.description else ""
         typescript_definition = f"""
-{description_str}
-type {operation_name} = (_: {{
-{formatted_params}
-}}) => any;
-"""
+    {description_str}
+    type {operation_name} = (_: {{
+    {formatted_params}
+    }}) => any;
+    """
         return typescript_definition.strip()
