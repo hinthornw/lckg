@@ -199,9 +199,13 @@ class APIRequestBodyProperty(APIPropertyBase):
     @classmethod
     def _process_object_schema(
         cls, schema: Schema, spec: OpenAPISpec, references_used: List[str]
-    ) -> Tuple[str, List["APIRequestBodyProperty"]]:
+    ) -> Tuple[Union[str, List[str], None], List["APIRequestBodyProperty"]]:
         properties = []
         required_props = schema.required or []
+        if schema.properties is None:
+            raise ValueError(
+                f"No properties found when processing object schema: {schema}"
+            )
         for prop_name, prop_schema in schema.properties.items():
             if isinstance(prop_schema, Reference):
                 ref_name = prop_schema.ref.split("/")[-1]
@@ -249,7 +253,7 @@ class APIRequestBodyProperty(APIPropertyBase):
                 )
                 return f"Array<{array_type.type}>"
 
-        return None
+        return "array"
 
     @classmethod
     def from_schema(
@@ -264,17 +268,14 @@ class APIRequestBodyProperty(APIPropertyBase):
         if references_used is None:
             references_used = []
 
-        properties = []
         schema_type = schema.type
-
+        properties: List[APIRequestBodyProperty] = []
         if schema_type == "object" and schema.properties:
             schema_type, properties = cls._process_object_schema(
-                cls, schema, spec, references_used
+                schema, spec, references_used
             )
         elif schema_type == "array":
-            schema_type = cls._process_array_schema(
-                cls, schema, name, spec, references_used
-            )
+            schema_type = cls._process_array_schema(schema, name, spec, references_used)
         elif schema_type in PRIMITIVE_TYPES:
             # Use the primitive type directly
             pass
@@ -312,19 +313,17 @@ class APIRequestBody(BaseModel):
         cls,
         media_type_obj: MediaType,
         spec: OpenAPISpec,
-        required_properties: List[str],
     ) -> List[APIRequestBodyProperty]:
         """Process the media type of the request body."""
-        api_request_body_properties = []
         schema = media_type_obj.media_type_schema
-
         if isinstance(schema, Reference):
             schema = spec.get_referenced_schema(schema)
         if schema is None:
             raise ValueError(
                 f"Could not resolve schema for media type: {media_type_obj}"
             )
-
+        api_request_body_properties = []
+        required_properties = schema.required or []
         if schema.type == "object" and schema.properties:
             for prop_name, prop_schema in schema.properties.items():
                 if isinstance(prop_schema, Reference):
@@ -358,14 +357,12 @@ class APIRequestBody(BaseModel):
     ) -> "APIRequestBody":
         """Instantiate from an OpenAPI RequestBody."""
         properties = []
-
         for media_type, media_type_obj in request_body.content.items():
             if media_type not in _SUPPORTED_MEDIA_TYPES:
                 continue
-
-            required_properties = media_type_obj.media_type_schema.required or []
             api_request_body_properties = cls._process_supported_media_type(
-                cls, media_type_obj, spec, required_properties
+                media_type_obj,
+                spec,
             )
             properties.extend(api_request_body_properties)
 
